@@ -1,0 +1,13 @@
+chainlit
+langchain-openai
+langchain
+langchain_community
+langchain_core
+langchain_huggingface
+langchain_text_splitters
+python-dotenv
+langchain_text_splitters
+openai
+tiktoken
+qdrant-client
+pymupdf
