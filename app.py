@@ -9,10 +9,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.runnable.config import RunnableConfig
-from langchain_huggingface import HuggingFaceEndpointEmbeddings
-from langchain_huggingface import HuggingFaceEndpoint
 import os
 import getpass
+from langchain_huggingface import HuggingFaceEndpoint
+from langchain_huggingface import HuggingFaceEndpointEmbeddings
 from langchain_community.vectorstores import FAISS
 
 #1. Set path for AirBnB 10K pdf document & load OpenAI API Key & embedding model
@@ -20,45 +20,57 @@ PROJECT_DIR = Path(__file__).parent
 SOURCE_PDF_DIR = PROJECT_DIR / 'data' / 'AirBnB.pdf'
 
 load_dotenv()
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 HF_LLM_ENDPOINT = os.environ["HF_LLM_ENDPOINT"]
+HF_EMBED_ENDPOINT = os.environ["HF_EMBED_ENDPOINT"]
 HF_TOKEN = os.environ["HF_TOKEN"]
 
 #Embeddings using Hugging face interface endpoint
-""" embedding_model = hf_embeddings = HuggingFaceEndpointEmbeddings(
+embedding_model = HuggingFaceEndpointEmbeddings(
     model=HF_EMBED_ENDPOINT,
     task="feature-extraction",
     huggingfacehub_api_token=HF_TOKEN,
-) """
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
+)
+
 
 #2. Load PDF Document
 loader = PyMuPDFLoader(SOURCE_PDF_DIR)
 documents = loader.load()
-print(len(documents))
 
 
 #3. Perform chunking
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-    model_name="gpt-4",
-    chunk_size = 200,
-    chunk_overlap = 25
-)
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=30)
 documents = text_splitter.split_documents(documents)
 
 
 #4 Store embeddings in QDrant vector store in memory
-from langchain_community.vectorstores import Qdrant
+""" from langchain_community.vectorstores import Qdrant
 qdrant_vector_store = Qdrant.from_documents(
     documents,
     embedding_model,
-    path="./app",
+    location=":memory:",
     collection_name="AirBnB 10K Document",
 )
-qdrant_retriever = qdrant_vector_store.as_retriever()
+qdrant_retriever = qdrant_vector_store.as_retriever() """
 
+if os.path.exists("./app"):
+    vectorstore = FAISS.load_local(
+        "./app", 
+        embedding_model, 
+        allow_dangerous_deserialization=True # this is necessary to load the vectorstore from disk as it's stored as a `.pkl` file.
+    )
+    hf_retriever = vectorstore.as_retriever()
+    print("Loaded Vectorstore")
+else:
+    print("Indexing Files")
+    os.makedirs("./app", exist_ok=True)
+    for i in range(0, len(documents), 32):
+        if i == 0:
+            vectorstore = FAISS.from_documents(documents[i:i+32], embedding_model)
+            continue
+        vectorstore.add_documents(documents[i:i+32])
+    vectorstore.save_local("./app")
+
+qdrant_retriever = vectorstore.as_retriever()
 
 #5 Quey for search
 query = "What is the 'maximum number of shares to be sold under the 10b5-1 Trading plan' by Brian Chesky?"
@@ -83,10 +95,9 @@ Context:
 rag_prompt = PromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
 
 #8 Create LLM endpoint
-
 openai_chat_model = HuggingFaceEndpoint(
     endpoint_url=HF_LLM_ENDPOINT,
-    max_new_tokens=50,
+    max_new_tokens=512,
     top_k=10,
     top_p=0.95,
     temperature=0.3,
@@ -123,7 +134,7 @@ async def start_chat():
     """
     lcel_rag_chain = (
         {"context": itemgetter("query") | qdrant_retriever, "query": itemgetter("query")}
-        | rag_prompt | openai_chat_model
+        | rag_prompt | openai_chat_model | StrOutputParser()
     )
     cl.user_session.set("lcel_rag_chain", lcel_rag_chain)
     print("++++++++++++++++++++++++++++++++++++++++")
@@ -144,6 +155,7 @@ async def main(message: cl.Message):
     lcel_rag_chain = cl.user_session.get("lcel_rag_chain")
 
     msg = cl.Message(content="")
+    print("Query : " + message.content)
 
     for chunk in await cl.make_async(lcel_rag_chain.stream)(
         {"query": message.content},
