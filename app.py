@@ -11,48 +11,53 @@ from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.runnable.config import RunnableConfig
 import os
 import getpass
-from langchain_huggingface import HuggingFaceEndpoint
 from langchain_huggingface import HuggingFaceEndpointEmbeddings
-from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEndpoint
 
 #1. Set path for AirBnB 10K pdf document & load OpenAI API Key & embedding model
 PROJECT_DIR = Path(__file__).parent
 SOURCE_PDF_DIR = PROJECT_DIR / 'data' / 'AirBnB.pdf'
 
 load_dotenv()
-HF_LLM_ENDPOINT = os.environ["HF_LLM_ENDPOINT"]
-HF_EMBED_ENDPOINT = os.environ["HF_EMBED_ENDPOINT"]
-HF_TOKEN = os.environ["HF_TOKEN"]
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+#HF_LLM_ENDPOINT = os.environ["HF_LLM_ENDPOINT"]
+#HF_TOKEN = os.environ["HF_TOKEN"]
 
 #Embeddings using Hugging face interface endpoint
-embedding_model = HuggingFaceEndpointEmbeddings(
+""" embedding_model = hf_embeddings = HuggingFaceEndpointEmbeddings(
     model=HF_EMBED_ENDPOINT,
     task="feature-extraction",
     huggingfacehub_api_token=HF_TOKEN,
-)
-
+) """
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
 
 #2. Load PDF Document
 loader = PyMuPDFLoader(SOURCE_PDF_DIR)
 documents = loader.load()
+print(len(documents))
 
 
 #3. Perform chunking
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=30)
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size = 1000,
+    chunk_overlap = 200
+)
 documents = text_splitter.split_documents(documents)
 
 
 #4 Store embeddings in QDrant vector store in memory
-""" from langchain_community.vectorstores import Qdrant
+from langchain_community.vectorstores import Qdrant
 qdrant_vector_store = Qdrant.from_documents(
     documents,
     embedding_model,
     location=":memory:",
     collection_name="AirBnB 10K Document",
 )
-qdrant_retriever = qdrant_vector_store.as_retriever() """
+qdrant_retriever = qdrant_vector_store.as_retriever()
 
-if os.path.exists("./app"):
+""" if os.path.exists("./app"):
     vectorstore = FAISS.load_local(
         "./app", 
         embedding_model, 
@@ -70,7 +75,7 @@ else:
         vectorstore.add_documents(documents[i:i+32])
     vectorstore.save_local("./app")
 
-qdrant_retriever = vectorstore.as_retriever()
+qdrant_retriever = vectorstore.as_retriever() """
 
 #5 Quey for search
 query = "What is the 'maximum number of shares to be sold under the 10b5-1 Trading plan' by Brian Chesky?"
@@ -95,7 +100,8 @@ Context:
 rag_prompt = PromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
 
 #8 Create LLM endpoint
-openai_chat_model = HuggingFaceEndpoint(
+openai_chat_model = ChatOpenAI(model="gpt-4o", temperature=0, streaming=True)
+""" openai_chat_model = HuggingFaceEndpoint(
     endpoint_url=HF_LLM_ENDPOINT,
     max_new_tokens=512,
     top_k=10,
@@ -103,7 +109,7 @@ openai_chat_model = HuggingFaceEndpoint(
     temperature=0.3,
     repetition_penalty=1.15,
     huggingfacehub_api_token=HF_TOKEN,
-)
+) """
 
 from operator import itemgetter
 from langchain.schema.output_parser import StrOutputParser
@@ -156,8 +162,8 @@ async def main(message: cl.Message):
 
     msg = cl.Message(content="")
     print("Query : " + message.content)
-
-    for chunk in await cl.make_async(lcel_rag_chain.stream)(
+  
+    async for chunk in lcel_rag_chain.astream(
         {"query": message.content},
         config=RunnableConfig(callbacks=[cl.LangchainCallbackHandler()]),
     ):
